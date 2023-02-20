@@ -1,5 +1,7 @@
 #include "../mlx/mlx.h"
 #include <math.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 int worldMap[16][16]= 
 {
@@ -21,6 +23,17 @@ int worldMap[16][16]=
 	{1,3,1,3,1,3,1,3,1,3,1,3,1,3,1,1}
 };
 
+typedef struct s_img
+{
+	void	*img;
+	int		*data;
+	int		size_l;
+	int		bpp;
+	int		endian;
+	int		img_width;
+	int		img_height;
+}		t_img;
+
 typedef struct s_game
 {
 	void	*mlx;
@@ -38,11 +51,38 @@ typedef struct s_game
 	double rayDirY;
 	int	mapX;
 	int mapY;
+	int	buf[480][640];
+	int	re_buf;
+	int **texture;
 	double sideDistX;
 	double sideDistY;
 	double deltaDistX;
 	double deltaDistY;
+	t_img	img;
 }		t_game;
+
+void	load_texture(t_game *game, int *texture, char *path, t_img *img)
+{
+	img->img = mlx_xpm_file_to_image(game->mlx, path, &img->img_width, &img->img_height);
+	img->data = (int *)mlx_get_data_addr(img->img, &img->bpp, &img->size_l, &img->endian);
+	for (int y = 0; y < img->img_height; y++)
+	{
+		for (int x = 0; x < img->img_width; x++)
+		{
+			texture[img->img_width * y + x] = img->data[img->img_width * y + x];
+		}
+	}
+	mlx_destroy_image(game->mlx, img->img);
+}
+
+void load_all_texture(t_game *game)
+{
+	t_img img;
+	load_texture(game, game->texture[0], "texture/colorstone.xpm", &img);
+	load_texture(game, game->texture[1], "texture/eagle.xpm", &img);
+	load_texture(game, game->texture[2], "texture/greystone.xpm", &img);
+	load_texture(game, game->texture[3], "texture/redbrick.xpm", &img);
+}
 
 void	verLine(t_game *info, int x, int y1, int y2, int color)
 {
@@ -56,10 +96,30 @@ void	verLine(t_game *info, int x, int y1, int y2, int color)
 	}
 }
 
+void	ft_draw(t_game *game)
+{
+	for (int y = 0; y < 480; y++)
+	{
+		for (int x = 0; x < 640; x++)
+		{
+			game->img.data[y * 640 + x] = game->buf[y][x];
+		}
+	}
+	mlx_put_image_to_window(game->mlx, game->mlx_win, game->img.img, 0, 0);
+}
 
 void	render_frame(t_game game)
 {
 		mlx_clear_window(game.mlx, game.mlx_win);
+		
+		for (int i = 0; i < 480; i++)
+		{
+			for (int j = 0; j < 640; j++)
+			{
+				game.buf[i][j] = 0;
+			}
+		}
+
 		for(int x = 0; x < 640; x++)
 		{
 			game.cameraX = 2 * x / 640.0f - 1;
@@ -111,16 +171,24 @@ void	render_frame(t_game game)
 				if(worldMap[game.mapX][game.mapY] > 0)
 					hit = 1;
 			}
+			//fish eye effect
+			/*
 			if (side == 0)
 				perpWallDist = (game.sideDistX - game.deltaDistX);
 			else
 				perpWallDist = (game.sideDistY - game.deltaDistY);
+				*/
+			if (side == 0)
+				perpWallDist = (game.mapX - game.posX + (1 - stepX) / 2) / game.rayDirX;
+			else
+				perpWallDist = (game.mapY - game.posY + (1 - stepY) / 2) / game.rayDirY;
+
 			int lineHeight = (int)(480 / perpWallDist);
 			int drawStart = -lineHeight / 2 + 480 / 2;
 			if(drawStart < 0) drawStart = 0;
 			int drawEnd = lineHeight / 2 + 480 / 2;
 			if(drawEnd >= 480) drawEnd = 480 - 1;
-			int color;
+			/*int color;
 			switch(worldMap[game.mapX][game.mapY])
 			{
 				case 1:  color = 255;	break;
@@ -130,13 +198,42 @@ void	render_frame(t_game game)
 			}
 			if(side == 1) {color = color / 2;}
 
-			verLine(&game, x, drawStart, drawEnd, color);
-		}
+			verLine(&game, x, drawStart, drawEnd, color);*/
 
+			int	texNum = worldMap[game.mapX][game.mapY];
+			double wallX;
+			if (side == 0)
+				wallX = game.posY + perpWallDist * game.rayDirY;
+			else
+				wallX = game.posX + perpWallDist * game.rayDirX;
+			wallX -= floor(wallX);
+
+			int texX = (int)(wallX * 64.0f);
+			if (side == 0 && game.rayDirX > 0)
+				texX = 64 - texX - 1;
+			if (side == 1 && game.rayDirX < 0)
+				texX = 64 - texX - 1;
+
+			double step = 1.0 * 64 / lineHeight;
+			double texPos = (drawStart - 480 / 2 + lineHeight / 2) * step;
+			for (int y = drawStart; y < drawEnd; y++)
+			{
+				int texY = (int)texPos & (63);
+				texPos += step;
+				int color = game.texture[texNum][64 * texY + texX];
+				if (side == 1)
+					color = (color >> 1) & 8355711;
+				game.buf[y][x] = color;
+				game.re_buf = 1;
+			}
+		}
+		ft_draw(&game);
 }
 
 int	player_move(int keycode, t_game *game)
 {
+	double rotspeed = 0.059400f;
+
 	if (keycode == 65307)
 		exit(0);
 	else if (keycode == 119)//forward W
@@ -145,37 +242,45 @@ int	player_move(int keycode, t_game *game)
 		game->posY += (game->dirY / 10);
 		render_frame(*game);
 	}
-	else if (keycode == 100)//rotate right E
+	else if (keycode == 65361)//<- rotate right
 	{
 		double oldDirX = game->dirX;
-		game->dirX = game->dirX * cos(50) - game->dirY * sin(50);
-		game->dirY = oldDirX * sin(50) + game->dirY * cos(50);
+		game->dirX = game->dirX * cos(rotspeed) - game->dirY * sin(rotspeed);
+		game->dirY = oldDirX * sin(rotspeed) + game->dirY * cos(rotspeed);
 		double oldPlaneX = game->planeX;
-		game->planeX = game->planeX * cos(50) - game->planeY * sin(50);
-		game->planeY = oldPlaneX * sin(50) + game->planeY * cos(50);
+		game->planeX = game->planeX * cos(rotspeed) - game->planeY * sin(rotspeed);
+		game->planeY = oldPlaneX * sin(rotspeed) + game->planeY * cos(rotspeed);
 		render_frame(*game);
 	}
 
 	else if (keycode == 115)//backward S
 	{
-		game->posX -= game->dirX;
-		game->posY -= game->dirY;
+		game->posX -= (game->dirX / 10);
+		game->posY -= (game->dirY / 10);
 		render_frame(*game);
 	}
-	else if (keycode == 101)//right D
+	else if (keycode == 100)//right D
 	{
-		game->posX += game->dirX;
-    	game->posY += game->dirY;
+		game->posX += (game->dirY / 10);
+		game->posY -= (game->dirX / 10);
 		render_frame(*game);
 	}
-	else if (keycode == 97)//left A
+	
+	else if (keycode == 97)//left D
+	{
+		game->posX -= (game->dirY / 10);
+		game->posY += (game->dirX / 10);
+		render_frame(*game);
+	}
+
+	else if (keycode == 65363)//-> rotate right
 	{
 		double oldDirX = game->dirX;
-		game->dirX = game->dirX * cos(-50) - game->dirY * sin(-50);
-		game->dirY = oldDirX * sin(-50) + game->dirY * cos(-50);
+		game->dirX = game->dirX * cos(-rotspeed) - game->dirY * sin(-rotspeed);
+		game->dirY = oldDirX * sin(-rotspeed) + game->dirY * cos(-rotspeed);
 		double oldPlaneX = game->planeX;
-		game->planeX = game->planeX * cos(-50) - game->planeY * sin(-50);
-		game->planeY = oldPlaneX * sin(-50) + game->planeY * cos(-50);
+		game->planeX = game->planeX * cos(-rotspeed) - game->planeY * sin(-rotspeed);
+		game->planeY = oldPlaneX * sin(-rotspeed) + game->planeY * cos(-rotspeed);
 		render_frame(*game);
 	}
 	else
@@ -196,6 +301,16 @@ int	main(void)
 	game.planeY = 0.66;
 
 	game.mlx = mlx_init();
+	game.texture = malloc(sizeof(int *) * 4);
+	for (int i = 0; i < 4; i++)
+	{
+		game.texture[i] = malloc(sizeof(int) * (64 * 64));
+		for (int j = 0; j < 64 * 64; j++)
+		{
+			game.texture[i][j] = 0;
+		}
+	}
+	load_all_texture(&game);
 	game.mlx_win = mlx_new_window(game.mlx, 640, 480, "Cub3d");
 	//while(1)
 	//{
@@ -208,6 +323,8 @@ int	main(void)
 		game.planeY = oldPlaneX * sin(-100) + game.planeY * cos(-100);*/
 //	}
 //	mlx_loop_hook(game.mlx, raycasting, game);
+	game.img.img = mlx_new_image(game.mlx, 640, 480);
+	game.img.data = (int *)mlx_get_data_addr(game.img.img, &game.img.bpp, &game.img.size_l, &game.img.endian);
 	render_frame(game);
 	mlx_hook(game.mlx_win, 2, 1L<<0, player_move, &game);
 	mlx_loop(game.mlx);
